@@ -318,6 +318,49 @@ catch(x){const e=$('#sgl');if(e)e.innerHTML='<div class="cd dn">Signal tidak bis
 V.sig=()=>'<h2>Signal</h2><div id="sgs"></div><div id="sgf"></div><div id="sgl"><span class="mu">Memuat signal...</span></div>';
 HOOK.sig=()=>{sigUI();sigLoad()};
 setInterval(()=>{if(me&&view==='sig')sigLoad()},15000);
+
+/* ===== Chat & Call (chat via Supabase, call via Jitsi Meet) ===== */
+const CH={room:'grup',last:0,busy:0},CALL_KEY='62bbb3ac7ec7';
+const chLink=t=>esc(t).replace(/https?:\/\/[^\s<]+/g,u=>`<a href="${u}" target="_blank" rel="noopener" style="color:var(--ac);word-break:break-all">${u}</a>`);
+const chMsg=m=>{const mine=m.user_id===me.id,adm=me.role==='admin';return `<div style="display:flex;justify-content:${mine?'flex-end':'flex-start'};margin:6px 0"><div style="max-width:84%;padding:6px 10px;border:1px solid ${m.is_admin?'var(--ac)':'var(--bd)'};${mine?'background:#1a1a1a':''}"><small style="color:${m.is_admin?'var(--ac)':'var(--mu)'}">${esc(m.name)}${m.is_admin?' · ADMIN':''} · ${hm(m.created_at)}${mine||adm?` · <a href="javascript:void 0" onclick="chDel(${m.id})" style="color:var(--dn)">hapus</a>`:''}</small><div style="white-space:pre-wrap;word-break:break-word">${chLink(m.body)}</div></div></div>`};
+V.chat=()=>'<h2>Chat</h2><div id="chs"></div><div id="chl" class="cd" style="height:50vh;overflow:auto"></div><div id="chf" style="margin-top:8px"></div>';
+function chUI(){const s=$('#chs'),f=$('#chf');if(!s||!f)return;
+const adm=me.role==='admin',dm='dm:'+me.id,r=CH.room,inDm=r.startsWith('dm:');
+const tabs=adm?[['grup','Grup'],['inbox','Inbox private']]:[['grup','Grup'],[dm,'Chat Admin']];
+s.innerHTML='<div class="tabs" style="margin:0 0 8px">'+tabs.map(([k,n])=>`<button class="${(r===k||(adm&&inDm&&k==='inbox'))?'on':''}" onclick="chRoom('${k}')">${n}</button>`).join('')+'</div>'+(adm&&inDm?'<div style="margin-bottom:8px"><button class="s" onclick="chRoom(\'inbox\')">← Inbox</button> <small class="mu" id="cht"></small></div>':'')+(!adm&&inDm?'<small class="mu">Pesan ini hanya bisa dibaca kamu dan admin.</small>':'');
+f.innerHTML=r==='inbox'?'':'<div style="display:flex;gap:6px;align-items:center"><input id="chm" placeholder="Tulis pesan..." maxlength="1000" onkeydown="if(event.key===\'Enter\')chSend()" style="margin:0"><button class="s" onclick="chSend()">Kirim</button></div>'+(inDm?'<div style="margin-top:8px"><button class="s" onclick="chCallDM()">📞 Ajak call private</button></div>':'')}
+function chRoom(k){CH.room=k;CH.last=0;chUI();chLoad(true)}
+async function chLoad(full){const l=$('#chl');if(!l||view!=='chat')return;
+if(!sbOn()){l.innerHTML='<p class="mu">Chat butuh database online (Supabase) dan login akun.</p>';return}
+if(!ld('tf_sbs',null)){l.innerHTML='<p class="dn">Sesi login habis. Keluar lalu masuk lagi.</p>';return}
+if(CH.busy)return;CH.busy=1;const room=CH.room;
+try{
+if(room==='inbox'){const d=await sbq('chat_messages?select=id,room,name,body,is_admin,created_at&room=like.dm:*&order=id.desc&limit=300');if(CH.room!==room)return;
+const g={};d.forEach(m=>{const t=g[m.room]||(g[m.room]={last:m,name:null});if(!m.is_admin&&!t.name)t.name=m.name});
+const rows=Object.entries(g).map(([rm,t])=>`<div class="cd" style="cursor:pointer" onclick="chRoom('${rm}')"><b>${esc(t.name||'Member')}</b> <small class="mu">${ago(Date.parse(t.last.created_at))}</small><div class="mu">${t.last.is_admin?'Kamu: ':''}${esc(t.last.body.slice(0,80))}</div></div>`);
+l.innerHTML=rows.length?rows.join(''):'<p class="mu">Belum ada chat private.</p>';return}
+const q='chat_messages?select=*&room=eq.'+encodeURIComponent(room)+(full?'&order=id.desc&limit=80':'&order=id.asc&id=gt.'+CH.last);
+const d=await sbq(q);if(CH.room!==room)return;if(full)d.reverse();
+if(full){l.innerHTML=d.length?d.map(chMsg).join(''):'<p class="mu">Belum ada pesan.</p>'}
+else if(d.length){if(!CH.last)l.innerHTML='';l.insertAdjacentHTML('beforeend',d.map(chMsg).join(''))}
+if(d.length){CH.last=d[d.length-1].id;l.scrollTop=l.scrollHeight}
+const t=$('#cht');if(t&&room.startsWith('dm:')){const u=d.find(m=>!m.is_admin);if(u)t.textContent=u.name}
+}catch(e){if(full&&CH.room===room)l.innerHTML='<p class="dn">Chat tidak bisa dimuat. Pastikan chat-call-setup.sql sudah dijalankan di Supabase.</p>'}
+finally{CH.busy=0}}
+async function chPost(room,t){await sbq('chat_messages',{method:'POST',body:JSON.stringify({room,body:String(t).slice(0,1000)})})}
+async function chSend(){const i=$('#chm'),t=(i&&i.value||'').trim();if(!t||CH.room==='inbox')return;i.value='';
+try{await chPost(CH.room,t);chLoad(false)}catch(e){toast('Gagal kirim. Cek login dan SQL chat-call-setup.');i.value=t}}
+async function chDel(id){if(!confirm('Hapus pesan ini?'))return;try{await sbq('chat_messages?id=eq.'+id,{method:'DELETE'});CH.last=0;chLoad(true)}catch(e){toast('Gagal hapus pesan')}}
+HOOK.chat=()=>{CH.last=0;chUI();chLoad(true)};
+setInterval(()=>{if(me&&view==='chat'&&!document.hidden)chLoad(CH.room==='inbox')},5000);
+
+const CALLS=[['kelas','Kelas Live','Admin presentasi, member menyimak. Mic dan kamera member mati saat masuk.'],['diskusi','Ruang Diskusi','Semua bisa ngobrol, nyalain kamera, dan bagi layar.']];
+const callUrl=(k,mute)=>'https://meet.jit.si/TF'+CALL_KEY+k+'#userInfo.displayName='+encodeURIComponent(JSON.stringify(me.name||'Member'))+(mute?'&config.startWithAudioMuted=true&config.startWithVideoMuted=true':'');
+function callJoin(k){window.open(callUrl(k,k==='kelas'&&me.role!=='admin'),'_blank','noopener')}
+async function callAnnounce(k,n){try{await chPost('grup','📞 '+n+' dibuka! Masuk lewat menu Call atau link: '+callUrl(k,false).split('#')[0]);toast('Pengumuman terkirim ke grup')}catch(e){toast('Gagal kirim pengumuman')}}
+function chCallDM(){const m=CH.room.slice(3).replace(/-/g,'').slice(0,12),u=callUrl('konsul'+m,false);window.open(u,'_blank','noopener');chPost(CH.room,'📞 Ajak call private: '+u.split('#')[0]).then(()=>chLoad(false)).catch(()=>{})}
+V.call=()=>'<h2>Call</h2><p class="mu">Voice dan video lewat Jitsi Meet (gratis). Tap Masuk, lalu izinkan mic dan kamera.</p>'+CALLS.map(([k,n,d])=>`<div class="cd"><h3>${n}</h3><p class="mu">${d}</p><button class="s" onclick="callJoin('${k}')">Masuk ruang</button>${me.role==='admin'?` <button class="s" onclick="callAnnounce('${k}','${n}')">Umumkan ke grup</button>`:''}</div>`).join('')+'<div class="cd"><h3>Call private</h3><p class="mu">Buka menu Chat, tab Chat Admin, lalu tap "Ajak call private".</p></div><div class="cd"><small class="mu">Kalau Jitsi minta login moderator, admin login dulu (Google/GitHub) sebagai pembuka ruang.</small></div>';
+
 const WA='6289603312583',waLink=m=>'https://wa.me/'+WA+'?text='+encodeURIComponent(m);
 /* ===== COT Report (CFTC) ===== */
 const COTM=[['088691','Emas (Gold)','c'],['084691','Perak (Silver)','c'],['067651','Minyak WTI','c'],['098662','US Dollar Index','f'],['099741','Euro (EUR)','f'],['096742','Poundsterling (GBP)','f'],['097741','Yen Jepang (JPY)','f'],['092741','Franc Swiss (CHF)','f'],['232741','Dolar Australia (AUD)','f'],['090741','Dolar Kanada (CAD)','f'],['13874A','S&P 500 E-mini','f'],['133741','Bitcoin (CME)','f']];
@@ -622,7 +665,7 @@ return `<div class="cd"><h3>Backtest kasar aturan signal</h3><small class="mu">D
 ${b.n?`<div class="cd"><h3>Trade backtest terakhir</h3><table>${th(['Tanggal','Arah','Entry','Hasil','Pip'])}${b.tr.slice(-8).reverse().map(x=>`<tr><td>${x.t?azDay(x.t):'-'}</td><td>${azSide(x.side)}</td><td>${azD(x.entry)}</td><td>${x.res==='tp'?'<span class="up">TP</span>':x.res==='sl'?'<span class="dn">SL</span>':'expired'}</td><td class="${x.pips>=0?'up':'dn'}">${bsS(x.pips,0)}</td></tr>`).join('')}</table></div>`:''}
 <div class="cd"><h3>Batasan yang harus dipahami</h3><small class="mu">1) Backtest memakai <b>penutupan harian saja</b>, jadi tidak melihat pergerakan di dalam hari. SL atau TP yang tersentuh lalu harga balik sebelum penutupan tidak terdeteksi, dan sebaliknya. Hasil trading sungguhan bisa jauh berbeda. 2) Spread, slippage, dan komisi tidak dihitung. 3) Satu pip dihitung $0,10 (SL maksimal 100 pip = $10, TP minimal 300 pip = $30). 4) SL $10 itu kecil dibanding gerak harian emas, jadi winrate bisa rendah. RR 1:3 baru untung kalau winrate sungguhan di atas 25%. 5) Rekam jejak live hanya mencatat saat app dibuka dan disimpan di HP ini. 6) Belum ada bukti bahwa aturan ini punya keunggulan, jadi anggap sebagai alat bantu membaca pasar, bukan jaminan.</small></div>`}
 
-const NAV=[['dash','Dashboard'],['bias','BIAS'],['market','Market'],['xau','XAUUSD'],['az','ANALYSIS'],['inter','Intermarket'],['cot','COT'],['heat','Heatmap'],['flow','Fiat Flow'],['sig','Signal'],['cal','Kalender'],['news','Berita'],['gmap','Peta Berita'],['ai','AI'],['tools','Tools'],['sess','Sesi'],['alerts','Alerts'],['about','Tentang'],['member','Membership'],['admin','Admin']];
+const NAV=[['dash','Dashboard'],['bias','BIAS'],['market','Market'],['xau','XAUUSD'],['az','ANALYSIS'],['inter','Intermarket'],['cot','COT'],['heat','Heatmap'],['flow','Fiat Flow'],['sig','Signal'],['chat','Chat'],['call','Call'],['cal','Kalender'],['news','Berita'],['gmap','Peta Berita'],['ai','AI'],['tools','Tools'],['sess','Sesi'],['alerts','Alerts'],['about','Tentang'],['member','Membership'],['admin','Admin']];
 const navL=()=>NAV.filter(n=>n[0]!=='admin'||me.role==='admin');
 addEventListener('keydown',e=>{if(!me||e.ctrlKey||e.metaKey||e.altKey||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;const i='1234567890-=qwertyuiopasd'.indexOf(e.key),n=navL()[i];if(i>=0&&n)location.hash=n[0]});
 /* Saham ID: watchlist akumulasi + detail di tengah */
